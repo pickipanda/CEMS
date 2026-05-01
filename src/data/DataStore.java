@@ -3,6 +3,7 @@ package data;
 import models.*;
 
 import java.io.*;
+import java.io.PrintWriter;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -27,13 +28,14 @@ static {
 }
     
     
+    // Fields: [0]=studentId, [1]=password, [2]=name, [3]=phone, [4]=email
     private static final List<String[]> STUDENT_CREDS_LIST = new ArrayList<>(Arrays.asList(
-        new String[]{ "S1", "123", "Rishabh" },
-        new String[]{ "S2", "123",   "Asmit"   },
-        new String[]{ "S3", "123", "Adi" },
-        new String[]{ "S4", "123",   "Kush"   },
-        new String[]{ "S5", "123", "Shreya" },
-        new String[]{ "S6", "123",   "Aryan"   }
+        new String[]{ "S1", "123", "Rishabh", "9026873827", "" },
+        new String[]{ "S2", "123", "Asmit",   "7017739713", "" },
+        new String[]{ "S2", "123", "Shreya",  "7081930002", "" },
+        new String[]{ "S2", "123", "Dr. Sumit Singh ji",   "", "" }
+
+        
     ));
 
     // ── Singleton ──────────────────────────────────────────────────────────
@@ -140,8 +142,12 @@ static {
                 String sid  = jsonString(obj, "studentId");
                 String name = jsonString(obj, "name");
                 String pass = jsonString(obj, "password");
-                if (sid != null && !hasStudentCred(sid))
-                    STUDENT_CREDS_LIST.add(new String[]{sid, orEmpty(pass), orEmpty(name)});
+                if (sid != null && !hasStudentCred(sid)) {
+                    String ph = jsonString(obj, "phone");
+                    String em = jsonString(obj, "email");
+                    STUDENT_CREDS_LIST.add(new String[]{sid, orEmpty(pass), orEmpty(name),
+                        orEmpty(ph), orEmpty(em)});
+                }
             }
         }
     }
@@ -166,40 +172,70 @@ static {
     public Student findStudent(String id, String password) {
         for (String[] row : STUDENT_CREDS_LIST)
             if (row[0].equals(id) && row[1].equals(password))
-                return new Student(row[0], row[2], row[1]);
+                return new Student(row[0], row[2], row[1],
+                    row.length > 3 ? row[3] : "",
+                    row.length > 4 ? row[4] : "");
         return null;
     }
 
     public List<Student> getStudents() {
         List<Student> list = new ArrayList<>();
         for (String[] row : STUDENT_CREDS_LIST)
-            list.add(new Student(row[0], row[2], row[1]));
+            list.add(new Student(row[0], row[2], row[1],
+                row.length > 3 ? row[3] : "",
+                row.length > 4 ? row[4] : ""));
         list.sort(Comparator.comparing(Student::getStudentId));
         return list;
     }
 
-    public void addStudent(String name, String password) {
+    public void addStudent(String name, String password, String phone, String email) {
         String id = "S" + String.format("%03d", STUDENT_CREDS_LIST.size() + 1);
-        STUDENT_CREDS_LIST.add(new String[]{id, password, name});
+        STUDENT_CREDS_LIST.add(new String[]{id, password, name,
+            phone != null ? phone : "", email != null ? email : ""});
         String json = String.format(
-            "{\"studentId\":\"%s\",\"name\":\"%s\",\"password\":\"%s\"}",
-            id, escJson(name), escJson(password));
+            "{\"studentId\":\"%s\",\"name\":\"%s\",\"password\":\"%s\"," +
+            "\"phone\":\"%s\",\"email\":\"%s\"}",
+            id, escJson(name), escJson(password), escJson(orEmpty(phone)), escJson(orEmpty(email)));
         fbPutAsync("students/" + id + ".json", json);
     }
 
-    public boolean updateStudent(String studentId, String newName, String newPassword) {
+    public boolean updateStudent(String studentId, String newName, String newPassword,
+                                   String newPhone, String newEmail) {
         for (String[] row : STUDENT_CREDS_LIST) {
             if (row[0].equals(studentId)) {
                 row[2] = newName;
                 row[1] = newPassword;
+                // Expand array if needed (old entries may have 3 elements)
+                if (row.length < 5) {
+                    String[] extended = new String[5];
+                    System.arraycopy(row, 0, extended, 0, row.length);
+                    for (int i = row.length; i < 5; i++) extended[i] = "";
+                    STUDENT_CREDS_LIST.set(STUDENT_CREDS_LIST.indexOf(row), extended);
+                    row = extended;
+                }
+                row[3] = newPhone  != null ? newPhone  : "";
+                row[4] = newEmail  != null ? newEmail  : "";
                 String json = String.format(
-                    "{\"studentId\":\"%s\",\"name\":\"%s\",\"password\":\"%s\"}",
-                    studentId, escJson(newName), escJson(newPassword));
+                    "{\"studentId\":\"%s\",\"name\":\"%s\",\"password\":\"%s\"," +
+                    "\"phone\":\"%s\",\"email\":\"%s\"}",
+                    studentId, escJson(newName), escJson(newPassword),
+                    escJson(row[3]), escJson(row[4]));
                 fbPutAsync("students/" + studentId + ".json", json);
                 return true;
             }
         }
         return false;
+    }
+
+    /** Backward-compat overload used by resetPassword. */
+    public boolean updateStudent(String studentId, String newName, String newPassword) {
+        String phone = STUDENT_CREDS_LIST.stream()
+            .filter(r -> r[0].equals(studentId))
+            .map(r -> r.length > 3 ? r[3] : "").findFirst().orElse("");
+        String email = STUDENT_CREDS_LIST.stream()
+            .filter(r -> r[0].equals(studentId))
+            .map(r -> r.length > 4 ? r[4] : "").findFirst().orElse("");
+        return updateStudent(studentId, newName, newPassword, phone, email);
     }
 
     public boolean deleteStudent(String studentId) {
@@ -408,6 +444,202 @@ static {
     //  ANALYTICS HELPERS
     // ══════════════════════════════════════════════════════════════════════
     public int getTotalStudents()  { return STUDENT_CREDS_LIST.size(); }
+
+    // ── WhatsApp Notification (Selenium auto-send) ──────────────────────
+    /**
+     * Auto-sends WhatsApp messages using Selenium + Microsoft Edge.
+     * Generates a Python script and runs it. Requires:
+     *   - Python 3 installed
+     *   - pip install selenium webdriver-manager
+     *   - Microsoft Edge installed
+     * Uses the user's default Edge profile so WhatsApp Web session is preserved.
+     */
+    public void sendWhatsAppNotifications(String eventName, String eventDate, String description) {
+        List<Student> students = getStudents();
+        List<String> phones = new ArrayList<>();
+        for (Student s : students) {
+            String ph = s.getPhone().trim().replaceAll("[^0-9]", "");
+            if (!ph.isEmpty()) phones.add(ph);
+        }
+        if (phones.isEmpty()) {
+            System.out.println("[WhatsApp] No student phone numbers registered.");
+            return;
+        }
+
+        String safeMsg = eventName + "\n\nDate: " + eventDate + "\n"
+            + (description.isEmpty() ? "Check the CEMS portal for details!" : description)
+            + "\n\nRegister now on the CEMS portal!";
+
+        // Build Python script content
+        StringBuilder sb = new StringBuilder();
+        sb.append("import time, sys, os\n");
+        sb.append("from selenium import webdriver\n");
+        sb.append("from selenium.webdriver.common.by import By\n");
+        sb.append("from selenium.webdriver.edge.options import Options\n");
+        sb.append("from selenium.webdriver.support.ui import WebDriverWait\n");
+        sb.append("from selenium.webdriver.support import expected_conditions as EC\n");
+        sb.append("from selenium.webdriver.common.keys import Keys\n\n");
+
+        sb.append("PHONES = [");
+        for (int i = 0; i < phones.size(); i++) {
+            sb.append("\"").append(phones.get(i)).append("\"");
+            if (i < phones.size() - 1) sb.append(", ");
+        }
+        sb.append("]\n\n");
+
+        sb.append("MSG = \"\"\"\n");
+        sb.append("\ud83c\udf89 New Event Alert!\n\n");
+        sb.append("*").append(safeMsg.replace("\n", "\n")).append("*");
+        sb.append("\n\"\"\"\n\n");
+
+        // Use a dedicated CEMS profile so it never conflicts with your normal Edge
+        sb.append("opts = Options()\n");
+        sb.append("# Dedicated profile folder for CEMS WhatsApp automation\n");
+        sb.append("cems_profile = os.path.join(os.path.expanduser('~'), 'cems_edge_profile')\n");
+        sb.append("os.makedirs(cems_profile, exist_ok=True)\n");
+        sb.append("opts.add_argument(f'--user-data-dir={cems_profile}')\n");
+        sb.append("opts.add_argument('--profile-directory=Default')\n");
+        sb.append("opts.add_argument('--no-first-run')\n");
+        sb.append("opts.add_argument('--no-default-browser-check')\n");
+        sb.append("opts.add_argument('--no-sandbox')\n");
+        sb.append("opts.add_argument('--disable-dev-shm-usage')\n");
+        sb.append("opts.add_argument('--disable-gpu')\n");
+        sb.append("opts.add_argument('--start-maximized')\n");
+        sb.append("opts.add_experimental_option('excludeSwitches', ['enable-automation'])\n");
+        sb.append("opts.add_experimental_option('useAutomationExtension', False)\n\n");
+        sb.append("import subprocess, shutil, glob\n");
+        sb.append("from selenium.webdriver.edge.service import Service\n\n");
+        sb.append("def find_edge_driver():\n");
+        sb.append("    candidates = [\n");
+        sb.append("        r'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\147.0.3912.86\\msedgedriver.exe',\n");
+        sb.append("        r'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\147.0.3912.72\\msedgedriver.exe',\n");
+        sb.append("        r'C:\\Program Files\\Microsoft\\Edge\\Application\\147.0.3912.86\\msedgedriver.exe',\n");
+        sb.append("        r'C:\\Program Files\\Microsoft\\Edge\\Application\\147.0.3912.72\\msedgedriver.exe',\n");
+        sb.append("        r'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedgedriver.exe',\n");
+        sb.append("        r'C:\\Program Files\\Microsoft\\Edge\\Application\\msedgedriver.exe',\n");
+        sb.append("    ]\n");
+        sb.append("    for base in [r'C:\\Program Files (x86)\\Microsoft\\Edge\\Application',\n");
+        sb.append("                 r'C:\\Program Files\\Microsoft\\Edge\\Application']:\n");
+        sb.append("        found = glob.glob(base + r'\\*\\msedgedriver.exe')\n");
+        sb.append("        if found: candidates.extend(found)\n");
+        sb.append("    for p in candidates:\n");
+        sb.append("        if os.path.exists(p): return p\n");
+        sb.append("    return shutil.which('msedgedriver') or shutil.which('msedgedriver.exe')\n\n");
+        sb.append("driver_path = find_edge_driver()\n");
+        sb.append("if not driver_path:\n");
+        sb.append("    print('ERROR: msedgedriver.exe not found. Make sure Microsoft Edge is installed.')\n");
+        sb.append("    sys.exit(1)\n");
+        sb.append("print(f'[Driver] Using: {driver_path}')\n\n");
+        sb.append("driver = webdriver.Edge(\n");
+        sb.append("    service=Service(driver_path),\n");
+        sb.append("    options=opts\n");
+        sb.append(")\n\n");
+
+        sb.append("# ── First: check if WhatsApp Web needs QR login (fresh profile) ──\n");
+        sb.append("print('Opening WhatsApp Web...')\n");
+        sb.append("driver.get('https://web.whatsapp.com')\n");
+        sb.append("# Wait up to 60s for either the QR code or the chat list to appear\n");
+        sb.append("qr_xpath    = '//*[@data-ref]'  # QR code element\n");
+        sb.append("chat_xpath  = '//*[@data-testid=\"chat-list\"] | //div[@aria-label=\"Chat list\"] | //div[@id=\"pane-side\"]'\n");
+        sb.append("try:\n");
+        sb.append("    WebDriverWait(driver, 60).until(\n");
+        sb.append("        EC.presence_of_element_located((By.XPATH, chat_xpath))\n");
+        sb.append("    )\n");
+        sb.append("    print('[OK] WhatsApp Web loaded and logged in.')\n");
+        sb.append("except:\n");
+        sb.append("    # QR shown — wait for user to scan (up to 120s)\n");
+        sb.append("    print('[INFO] Please SCAN the QR code in the Edge window. Waiting up to 2 minutes...')\n");
+        sb.append("    try:\n");
+        sb.append("        WebDriverWait(driver, 120).until(\n");
+        sb.append("            EC.presence_of_element_located((By.XPATH, chat_xpath))\n");
+        sb.append("        )\n");
+        sb.append("        print('[OK] QR scanned! Logged in. Next time this will be automatic.')\n");
+        sb.append("    except:\n");
+        sb.append("        print('[ERROR] WhatsApp Web did not load. Check your internet connection.')\n");
+        sb.append("        driver.quit()\n");
+        sb.append("        sys.exit(1)\n\n");
+        sb.append("SEND_BTN_XPATH = '//*[@data-testid=\"send\"]'\n");
+        sb.append("MSG_BOX_XPATH  = '//*[@data-testid=\"conversation-compose-box-input\"]'\n\n");
+        sb.append("import urllib.parse\n");
+        sb.append("sent = 0\n");
+        sb.append("failed = []\n\n");
+        sb.append("for phone in PHONES:\n");
+        sb.append("    try:\n");
+        sb.append("        encoded = urllib.parse.quote(MSG, safe='')\n");
+        sb.append("        url = f'https://web.whatsapp.com/send?phone={phone}&text={encoded}'\n");
+        sb.append("        driver.get(url)\n");
+        sb.append("        wait = WebDriverWait(driver, 60)\n");
+        sb.append("        # Wait for page to load — look for send button OR invalid number alert\n");
+        sb.append("        try:\n");
+        sb.append("            btn = wait.until(EC.element_to_be_clickable((By.XPATH, SEND_BTN_XPATH)))\n");
+        sb.append("            time.sleep(1)\n");
+        sb.append("            btn.click()\n");
+        sb.append("            print(f'[OK] Sent to {phone}')\n");
+        sb.append("            sent += 1\n");
+        sb.append("        except Exception as e:\n");
+        sb.append("            # Fallback: find message box and press Enter\n");
+        sb.append("            try:\n");
+        sb.append("                box = WebDriverWait(driver, 30).until(\n");
+        sb.append("                    EC.presence_of_element_located((By.XPATH, MSG_BOX_XPATH)))\n");
+        sb.append("                box.click()\n");
+        sb.append("                time.sleep(1)\n");
+        sb.append("                box.send_keys(Keys.ENTER)\n");
+        sb.append("                print(f'[OK-fallback] Sent to {phone}')\n");
+        sb.append("                sent += 1\n");
+        sb.append("            except:\n");
+        sb.append("                raise e\n");
+        sb.append("        time.sleep(3)\n");
+        sb.append("    except Exception as ex:\n");
+        sb.append("        print(f'[FAIL] {phone}: {ex}')\n");
+        sb.append("        failed.append(phone)\n\n");
+        sb.append("print(f'\\nDone. Sent: {sent}, Failed: {len(failed)}')\n");
+        sb.append("if failed: print(\'Failed numbers:\', failed)\n");
+        sb.append("time.sleep(3)\n");
+        sb.append("driver.quit()\n");
+
+        String script = sb.toString();
+
+        new Thread(() -> {
+            try {
+                // Write Python script to temp file
+                File scriptFile = File.createTempFile("cems_whatsapp_", ".py");
+                scriptFile.deleteOnExit();
+                try (PrintWriter pw = new PrintWriter(scriptFile, StandardCharsets.UTF_8)) {
+                    pw.print(script);
+                }
+                System.out.println("[WhatsApp] Script written to: " + scriptFile.getAbsolutePath());
+
+                // Install dependencies first
+                boolean isWin = System.getProperty("os.name").toLowerCase().contains("win");
+                String pip = isWin ? "pip" : "pip3";
+                String python = isWin ? "python" : "python3";
+
+                ProcessBuilder pipPb = new ProcessBuilder(pip, "install", "--quiet",
+                    "selenium", "webdriver-manager");
+                pipPb.redirectErrorStream(true);
+                Process pipProc = pipPb.start();
+                pipProc.waitFor();
+
+                // Run the selenium script
+                ProcessBuilder pb = new ProcessBuilder(python, scriptFile.getAbsolutePath());
+                pb.redirectErrorStream(true);
+                pb.inheritIO();
+                Process proc = pb.start();
+                proc.waitFor();
+            } catch (Exception ex) {
+                System.err.println("[WhatsApp] Error: " + ex.getMessage());
+                ex.printStackTrace();
+            }
+        }, "WhatsApp-Selenium").start();
+    }
+
+    private static String encodeForUrl(String text) {
+        try {
+            return java.net.URLEncoder.encode(text, "UTF-8").replace("+", "%20");
+        } catch (Exception e) {
+            return text;
+        }
+    }
     public int getTotalEvents()    { return events.size(); }
 
     public double getOverallAttendanceRate() {

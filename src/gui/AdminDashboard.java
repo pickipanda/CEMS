@@ -314,6 +314,19 @@ public class AdminDashboard extends JFrame {
             refreshEventTable();
             refreshAnalytics();
             AppTheme.showSuccess(this, "Event \"" + name + "\" added!");
+
+            // ── WhatsApp notification ──────────────────────────────────────
+            int waSend = JOptionPane.showConfirmDialog(this,
+                "<html><b>Send WhatsApp notification to all students?</b><br>" +
+                "Edge will open web.whatsapp.com for each student with a phone number.<br>" +
+                "<small>Make sure you are already logged into WhatsApp Web in Edge.</small></html>",
+                "Send WhatsApp Notification", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (waSend == JOptionPane.YES_OPTION) {
+                final String evtName = name, evtDate = date, evtDesc = desc;
+                ds.sendWhatsAppNotifications(evtName, evtDate, evtDesc);
+                AppTheme.showSuccess(this,
+                    "Opening WhatsApp Web in Edge for each student with a registered phone number.");
+            }
         });
 
         // ── Action buttons ──────────────────────────────────────────────────
@@ -458,7 +471,7 @@ public class AdminDashboard extends JFrame {
         panel.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
 
         studentTableModel = new DefaultTableModel(
-            new String[]{"Student ID", "Name", "Registered Events", "Attended Events"}, 0) {
+            new String[]{"Student ID", "Name", "Phone", "Email", "Registered Events", "Attended Events"}, 0) {
             public boolean isCellEditable(int r, int c) { return false; }
         };
         JTable table = new JTable(studentTableModel);
@@ -469,26 +482,69 @@ public class AdminDashboard extends JFrame {
 
         JPanel actionBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 8));
         actionBar.setOpaque(false);
-        JButton editBtn   = makeAccentButton("✏️  Edit Student",    new Color(30, 160, 255));
-        JButton deleteBtn = AppTheme.dangerButton("🗑  Delete Student");
-        JButton resetBtn  = makeAccentButton("🔑  Reset Password", new Color(220, 130, 0));
-        actionBar.add(editBtn); actionBar.add(deleteBtn); actionBar.add(resetBtn);
+        JButton addStudBtn = AppTheme.primaryButton("➕  Add Student");
+        JButton editBtn    = makeAccentButton("✏️  Edit Student",    new Color(30, 160, 255));
+        JButton deleteBtn  = AppTheme.dangerButton("🗑  Delete Student");
+        JButton resetBtn   = makeAccentButton("🔑  Reset Password", new Color(220, 130, 0));
+        actionBar.add(addStudBtn); actionBar.add(editBtn); actionBar.add(deleteBtn); actionBar.add(resetBtn);
+
+        addStudBtn.addActionListener(e -> {
+            Font dlgFont = new Font("Segoe UI", Font.PLAIN, 14);
+            Font lblFont = new Font("Segoe UI", Font.BOLD, 14);
+            JTextField newName  = AppTheme.styledField(20); newName.setFont(dlgFont);
+            JTextField newPass  = AppTheme.styledField(20); newPass.setFont(dlgFont);
+            JTextField newPhone = AppTheme.styledField(20); newPhone.setFont(dlgFont);
+            newPhone.setToolTipText("With country code, e.g. 919876543210 for India");
+            JTextField newEmail = AppTheme.styledField(20); newEmail.setFont(dlgFont);
+            JPanel dlgP = new JPanel(new GridLayout(8, 1, 6, 6));
+            dlgP.setBackground(AppTheme.BG_CARD);
+            dlgP.add(AppTheme.label("Name:", lblFont, AppTheme.TEXT_SECONDARY));
+            dlgP.add(newName);
+            dlgP.add(AppTheme.label("Password:", lblFont, AppTheme.TEXT_SECONDARY));
+            dlgP.add(newPass);
+            dlgP.add(AppTheme.label("📱 Phone (with country code, e.g. 919876543210):", lblFont, AppTheme.TEXT_SECONDARY));
+            dlgP.add(newPhone);
+            dlgP.add(AppTheme.label("✉️ Email:", lblFont, AppTheme.TEXT_SECONDARY));
+            dlgP.add(newEmail);
+            int res = JOptionPane.showConfirmDialog(this, dlgP, "Add New Student",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+            if (res == JOptionPane.OK_OPTION) {
+                String nm = newName.getText().trim();
+                String pw = newPass.getText().trim();
+                if (nm.isEmpty() || pw.isEmpty()) {
+                    AppTheme.showWarn(this, "Name and password are required.");
+                    return;
+                }
+                ds.addStudent(nm, pw, newPhone.getText().trim(), newEmail.getText().trim());
+                refreshStudentTable();
+                refreshAnalytics();
+                AppTheme.showSuccess(this, "Student \"" + nm + "\" added!");
+            }
+        });
 
         editBtn.addActionListener(e -> {
             int row = table.getSelectedRow();
             if (row < 0) { AppTheme.showWarn(this, "Select a student."); return; }
-            String sid  = (String) studentTableModel.getValueAt(row, 0);
-            String sname= (String) studentTableModel.getValueAt(row, 1);
-            JTextField nameF = AppTheme.styledField(20); nameF.setText(sname);
-            nameF.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-            JTextField passF = AppTheme.styledField(20);
-            passF.setFont(new Font("Segoe UI", Font.PLAIN, 14));
-            JPanel dlgP = new JPanel(new GridLayout(4,1,8,8));
+            String sid    = (String) studentTableModel.getValueAt(row, 0);
+            String sname  = (String) studentTableModel.getValueAt(row, 1);
+            String sphone = (String) studentTableModel.getValueAt(row, 2);
+            String semail = (String) studentTableModel.getValueAt(row, 3);
+            Font dlgFont = new Font("Segoe UI", Font.PLAIN, 14);
+            Font lblFont = new Font("Segoe UI", Font.BOLD, 14);
+            JTextField nameF  = AppTheme.styledField(20); nameF.setText(sname);  nameF.setFont(dlgFont);
+            JTextField passF  = AppTheme.styledField(20);                        passF.setFont(dlgFont);
+            JTextField phoneF = AppTheme.styledField(20); phoneF.setText(sphone != null ? sphone : ""); phoneF.setFont(dlgFont);
+            JTextField emailF = AppTheme.styledField(20); emailF.setText(semail != null ? semail : ""); emailF.setFont(dlgFont);
+            JPanel dlgP = new JPanel(new GridLayout(8, 1, 6, 6));
             dlgP.setBackground(AppTheme.BG_CARD);
-            dlgP.add(AppTheme.label("New Name:", new Font("Segoe UI",Font.BOLD,14), AppTheme.TEXT_SECONDARY));
+            dlgP.add(AppTheme.label("New Name:", lblFont, AppTheme.TEXT_SECONDARY));
             dlgP.add(nameF);
-            dlgP.add(AppTheme.label("New Password (leave blank to keep):", new Font("Segoe UI",Font.BOLD,14), AppTheme.TEXT_SECONDARY));
+            dlgP.add(AppTheme.label("New Password (leave blank to keep):", lblFont, AppTheme.TEXT_SECONDARY));
             dlgP.add(passF);
+            dlgP.add(AppTheme.label("📱 Phone (with country code, e.g. 919876543210):", lblFont, AppTheme.TEXT_SECONDARY));
+            dlgP.add(phoneF);
+            dlgP.add(AppTheme.label("✉️ Email:", lblFont, AppTheme.TEXT_SECONDARY));
+            dlgP.add(emailF);
             int res = JOptionPane.showConfirmDialog(this, dlgP, "Edit Student – " + sid,
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
             if (res == JOptionPane.OK_OPTION) {
@@ -496,7 +552,8 @@ public class AdminDashboard extends JFrame {
                     ? ds.getStudents().stream().filter(s->s.getStudentId().equals(sid))
                         .map(Student::getPassword).findFirst().orElse("")
                     : passF.getText().trim();
-                ds.updateStudent(sid, nameF.getText().trim(), pw);
+                ds.updateStudent(sid, nameF.getText().trim(), pw,
+                    phoneF.getText().trim(), emailF.getText().trim());
                 refreshStudentTable();
                 refreshAnalytics();
                 AppTheme.showSuccess(this, "Student updated!");
@@ -543,7 +600,10 @@ public class AdminDashboard extends JFrame {
                 .filter(ev -> ev.getRegisteredStudents().contains(s.getStudentId())).count();
             long att = ds.getEvents().stream()
                 .filter(ev -> ev.getAttendedStudents().contains(s.getStudentId())).count();
-            studentTableModel.addRow(new Object[]{s.getStudentId(), s.getName(), reg, att});
+            studentTableModel.addRow(new Object[]{
+                s.getStudentId(), s.getName(),
+                s.getPhone(), s.getEmail(),
+                reg, att});
         }
     }
 
